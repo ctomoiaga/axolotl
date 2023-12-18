@@ -308,7 +308,7 @@ def load_model(
             llm_int8_threshold=6.0,
             llm_int8_has_fp16_weight=False,
             bnb_4bit_compute_dtype=cfg.torch_dtype,
-            bnb_4bit_use_double_quant=True,
+            bnb_4bit_use_double_quant=(not cfg.use_loftq),
             bnb_4bit_quant_type="nf4",
         )
     # sample packing uses custom FA2 patch
@@ -634,7 +634,7 @@ def find_all_linear_names(model):
 def load_lora(model, cfg, inference=False):
     # type: (PreTrainedModel, DictDefault, bool) -> Tuple[PreTrainedModel, Optional[PeftConfig]]
 
-    from peft import LoraConfig, PeftModel, get_peft_model
+    from peft import LoraConfig, PeftModel, get_peft_model, LoftQConfig
 
     lora_target_modules = list(cfg.lora_target_modules or [])
 
@@ -643,6 +643,15 @@ def load_lora(model, cfg, inference=False):
         LOG.info(f"found linear modules: {repr(linear_names)}")
         lora_target_modules = list(set(lora_target_modules + linear_names))
 
+    if cfg.use_loftq:
+        LOG.debug("Enabling LOFTQ Config")
+        loftq_config = LoftQConfig(loftq_bits=4, loftq_iter=5)
+        init_lora_weights = "loftq"
+    else:
+        LOG.debug("Run without LOFTQ")
+        loftq_config = None
+        init_lora_weights = True
+        
     lora_config = LoraConfig(
         r=cfg.lora_r,
         lora_alpha=cfg.lora_alpha,
@@ -652,6 +661,8 @@ def load_lora(model, cfg, inference=False):
         modules_to_save=cfg.lora_modules_to_save if cfg.lora_modules_to_save else None,
         bias="none",
         task_type="CAUSAL_LM",
+        loftq_config=loftq_config,
+        init_lora_weights=init_lora_weights
     )
 
     if cfg.lora_model_dir:
@@ -661,8 +672,8 @@ def load_lora(model, cfg, inference=False):
             cfg.lora_model_dir,
             is_trainable=(not inference),
         )
-    else:
-        model = get_peft_model(model, lora_config)
+
+    model = get_peft_model(model, lora_config)
 
     model.print_trainable_parameters()
 
